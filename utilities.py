@@ -4,7 +4,6 @@ import numpy as np
 from PIL import Image
 
 def preprocess_image(image: np.ndarray, target_size=(1024, 1024)):
-    # Resize and normalize image
     transform = transforms.Compose([
         transforms.ToPILImage(),
         transforms.Resize(target_size),
@@ -14,7 +13,6 @@ def preprocess_image(image: np.ndarray, target_size=(1024, 1024)):
     return tensor
 
 def postprocess_image(mask: torch.Tensor, original_size):
-    # Resize to original size and convert to numpy
     mask = transforms.Resize(original_size)(mask.unsqueeze(0))
     mask = mask.squeeze().cpu().detach().numpy()
     mask = (mask * 255).astype(np.uint8)
