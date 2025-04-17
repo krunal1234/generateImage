@@ -4,14 +4,14 @@ from PIL import Image
 import torch
 from torch import nn
 from torchvision import transforms
-from torchvision.models.segmentation import deeplabv3_resnet101
+import torchvision.models.segmentation as segmentation
 
 class BriaRMBG:
     def __init__(self, model_path=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Load pre-trained DeepLabV3 model for background removal
-        self.model = deeplabv3_resnet101(pretrained=True)  # This is a pre-trained model for segmentation
+        self.model = segmentation.deeplabv3_resnet101(weights="COCO_WITH_VOC_LABELS_V1")  # This is a pre-trained model for segmentation
         self.model.to(self.device)
         self.model.eval()
 
