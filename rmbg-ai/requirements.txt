@@ -1,9 +1,8 @@
-torch
-torchvision
-pillow
-numpy
-typing
-scikit-image
-huggingface_hub
 fastapi
 uvicorn
+python-multipart
+Pillow
+requests
+torch
+numpy
+huggingface_hub
