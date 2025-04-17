@@ -28,6 +28,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Route to serve index.html
+@app.get("/", response_class=HTMLResponse)
+async def serve_index():
+    index_path = os.path.join("static", "index.html")
+    with open(index_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+    return HTMLResponse(content=html_content)
+
+
 @app.post("/rmbg_from_file")
 async def remove_background_from_file(file: UploadFile = File(...)):
     try:
