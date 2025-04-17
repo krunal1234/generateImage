@@ -1,14 +1,12 @@
-from PIL import Image
 import torch
-from torchvision import transforms
+import torch.nn as nn
 
-class BriaRMBG:
+class BriaRMBG(nn.Module):
     def __init__(self):
-        # Load your background removal model here
-        # e.g., from a .pth file or huggingface
-        pass
+        super().__init__()
+        # In real case, load your model here
 
-    def remove_background(self, image: Image.Image) -> Image.Image:
-        # Dummy processing — just return same image
-        # Replace this with your real background removal logic
-        return image
+    def forward(self, x):
+        # Simulate mask output: white foreground
+        b, c, h, w = x.shape
+        return torch.ones((1, 1, h, w), device=x.device)
