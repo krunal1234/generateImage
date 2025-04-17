@@ -63,7 +63,7 @@ app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
 def remove_img_bg_local(input_path: str, output_path: str):
     model_path = hf_hub_download("briaai/RMBG-1.4", 'model.pth')
-    net = BriaRMBG()
+    net = BriaRMBG(model_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net.load_state_dict(torch.load(model_path, map_location=device))
     net.to(device)
