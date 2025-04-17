@@ -74,8 +74,6 @@ app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 def remove_img_bg_local(input_path: str, output_path: str):
     net = BriaRMBG()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net.to(device)
-    net.eval()
 
     # Validate and read image
     try:
