@@ -4,45 +4,38 @@ from PIL import Image
 import torch
 from torch import nn
 from torchvision import transforms
-from torch import hub
+from torchvision.models.segmentation import deeplabv3_resnet101
 
 class BriaRMBG:
     def __init__(self, model_path=None):
-        # Load the pre-trained model here
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Assuming the model is a torch model, you need to load its architecture and weights
-        self.model = self.load_model(model_path)
+        # Load pre-trained DeepLabV3 model for background removal
+        self.model = deeplabv3_resnet101(pretrained=True)  # This is a pre-trained model for segmentation
         self.model.to(self.device)
         self.model.eval()
 
-    def load_model(self, model_path):
-        # Example of loading the model from a file
-        model = YourModelClass()  # Replace with the actual model class
-        if model_path:
-            model.load_state_dict(torch.load(model_path, map_location=self.device))
-        return model
-
     def remove_background(self, image: Image.Image) -> Image.Image:
-        # Implement the real background removal logic here
         input_image = self.preprocess_image(image)
-        with torch.no_grad():
-            result = self.model(input_image)  # Run the image through the model
         
-        output_image = self.postprocess_image(result)
+        with torch.no_grad():
+            output = self.model(input_image)['out'][0]  # Get the segmentation output
+        
+        output_image = self.postprocess_image(output)
         return output_image
 
     def preprocess_image(self, image: Image.Image) -> torch.Tensor:
-        # Implement preprocessing like resizing, normalization, etc.
         transform = transforms.Compose([
             transforms.Resize((1024, 1024)),
             transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
         image_tensor = transform(image).unsqueeze(0).to(self.device)
         return image_tensor
 
     def postprocess_image(self, output_tensor: torch.Tensor) -> Image.Image:
-        # Implement postprocessing like converting to PIL image
-        output_image = output_tensor.squeeze().cpu().numpy()
-        output_image = (output_image * 255).astype(np.uint8)
-        return Image.fromarray(output_image)
+        # Convert the output tensor to a binary mask and apply it to the original image
+        output_mask = torch.argmax(output_tensor, dim=0).cpu().numpy()
+        output_mask = (output_mask == 15).astype(np.uint8) * 255  # Class 15 is for "person" in COCO dataset
+        output_image = Image.fromarray(output_mask)
+        return output_image
