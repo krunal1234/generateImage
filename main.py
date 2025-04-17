@@ -62,30 +62,28 @@ app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
 
 def remove_img_bg_local(input_path: str, output_path: str):
-    model_path = hf_hub_download("briaai/RMBG-1.4", 'model.pth')
-    net = BriaRMBG(model_path)
+    net = BriaRMBG()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net.load_state_dict(torch.load(model_path, map_location=device))
     net.to(device)
     net.eval()
 
     # Validate and read image
     try:
         with Image.open(input_path) as pil_image:
-            pil_image = pil_image.convert("RGB")  # Ensure 3-channel RGB
+            pil_image = pil_image.convert("RGB")
             orig_im = np.array(pil_image)
     except Exception:
-        raise ValueError("Downloaded file is not a valid image")
+        raise ValueError("Uploaded file is not a valid image")
 
     if orig_im is None or orig_im.size == 0:
         raise ValueError("Failed to load image for processing")
 
-    # Prepare input
+    # Preprocess input
     model_input_size = [1024, 1024]
     image = preprocess_image(orig_im, model_input_size).to(device)
     result = net(image)
 
-    # Post-process
+    # Postprocess result
     result_image = postprocess_image(result[0][0], orig_im.shape[0:2])
     mask = Image.fromarray(result_image).convert("L")
     orig_image = Image.open(input_path).convert("RGBA")
@@ -96,7 +94,6 @@ def remove_img_bg_local(input_path: str, output_path: str):
     no_bg_image.save(output_path)
 
     return output_path
-
 
 @app.get("/rmbg_from_url")
 def remove_background_from_url(image_url: str = Query(..., description="URL of the image")):
