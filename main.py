@@ -1,47 +1,66 @@
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi import FastAPI, Query, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
 import os
-import uuid
 import shutil
+import uuid
 import torch
-import requests
-import numpy as np
 from PIL import Image
-
+from huggingface_hub import hf_hub_download
 from briarmbg import BriaRMBG
 from utilities import preprocess_image, postprocess_image
+from diffusers import StableDiffusionPipeline
+import numpy as np
 
 app = FastAPI()
-
-# CORS setup
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Output directory
 OUTPUT_DIR = "./output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
+# Global variables
+net = None
+stable_diffusion_pipe = None
+
+# Startup: Load models
+@app.on_event("startup")
+def load_model():
+    global net, stable_diffusion_pipe
+
+    # Load background removal model
+    model_path = hf_hub_download("briaai/RMBG-1.4", 'model.pth')
+    net = BriaRMBG()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    net.load_state_dict(torch.load(model_path, map_location=device))
+    net.to(device)
+    net.eval()
+
+    # Load Stable Diffusion
+    stable_diffusion_pipe = StableDiffusionPipeline.from_pretrained(
+        "CompVis/stable-diffusion-v1-4",
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+    )
+    stable_diffusion_pipe.to(device)
+
+# Serve frontend
 @app.get("/", response_class=HTMLResponse)
 async def serve_index():
     index_path = os.path.join("static", "index.html")
     with open(index_path, "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
+        html_content = f.read()
+    return HTMLResponse(content=html_content)
 
-@app.post("/rmbg_from_file")
-async def remove_background_from_file(file: UploadFile = File(...)):
+# Image processing endpoint
+@app.post("/product_image_display")
+async def product_image_display(
+    file: UploadFile = File(...),
+    background_prompt: str = Form(...)
+):
     try:
         temp_id = str(uuid.uuid4())
         temp_input_path = f"{OUTPUT_DIR}/{temp_id}_input.png"
         temp_output_path = f"{OUTPUT_DIR}/{temp_id}_no_bg.png"
+        final_output_path = f"{OUTPUT_DIR}/{temp_id}_final_output.png"
 
         if not file.content_type.startswith("image/"):
             return JSONResponse(content={"error": "Uploaded file is not an image"}, status_code=400)
@@ -51,45 +70,40 @@ async def remove_background_from_file(file: UploadFile = File(...)):
 
         remove_img_bg_local(temp_input_path, temp_output_path)
 
-        output_url = f"/output/{os.path.basename(temp_output_path)}"
-        return {"success": True, "url": output_url}
+        product_image = Image.open(temp_output_path).convert("RGBA")
+        background_image = generate_background_with_stable_diffusion(background_prompt)
+        final_image = combine_images(background_image, product_image)
+
+        final_image.save(final_output_path)
+
+        output_url = f"/output/{os.path.basename(final_output_path)}"
+        no_bg_url = f"/output/{os.path.basename(temp_output_path)}"
+
+        return {
+            "success": True,
+            "url": output_url,
+            "no_bg_url": no_bg_url
+        }
+
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
-@app.get("/rmbg_from_url")
-def remove_background_from_url(image_url: str = Query(...)):
-    try:
-        temp_id = str(uuid.uuid4())
-        temp_input_path = f"{OUTPUT_DIR}/{temp_id}_input.png"
-        temp_output_path = f"{OUTPUT_DIR}/{temp_id}_no_bg.png"
 
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(image_url, stream=True, headers=headers)
-        if response.status_code != 200 or "image" not in response.headers.get("Content-Type", ""):
-            return JSONResponse(content={"error": "Invalid image URL"}, status_code=400)
-
-        with open(temp_input_path, 'wb') as out_file:
-            shutil.copyfileobj(response.raw, out_file)
-
-        remove_img_bg_local(temp_input_path, temp_output_path)
-
-        output_url = f"/output/{os.path.basename(temp_output_path)}"
-        return {"success": True, "url": output_url}
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
+# Helper functions
 def remove_img_bg_local(input_path: str, output_path: str):
+    if net is None:
+        raise ValueError("Background removal model not loaded")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = BriaRMBG().to(device)
-    net.eval()
+    net.to(device)
 
     with Image.open(input_path) as pil_image:
         pil_image = pil_image.convert("RGB")
         orig_im = np.array(pil_image)
 
     model_input_size = [1024, 1024]
-    image_tensor = preprocess_image(orig_im, model_input_size).to(device)
-    result = net(image_tensor)  # simulate output
+    image = preprocess_image(orig_im, model_input_size).to(device)
+    result = net(image)
 
     result_image = postprocess_image(result[0][0], orig_im.shape[0:2])
     mask = Image.fromarray(result_image).convert("L")
@@ -101,6 +115,23 @@ def remove_img_bg_local(input_path: str, output_path: str):
 
     return output_path
 
+
+def generate_background_with_stable_diffusion(prompt: str) -> Image:
+    generator = torch.manual_seed(42)
+    image = stable_diffusion_pipe(prompt, guidance_scale=7.5, num_inference_steps=50).images[0]
+    return image
+
+
+def combine_images(background_image: Image, product_image: Image) -> Image:
+    product_image = product_image.resize(background_image.size, Image.ANTIALIAS)
+    background_image.paste(product_image, (0, 0), product_image)
+    return background_image
+
+
+# Mount output directory
+app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
+
+# Run server
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
