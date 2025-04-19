@@ -1,130 +1,96 @@
-from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import UploadFile, File
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-
 import os
-import uuid
-import shutil
-import torch
-import requests
-import numpy as np
+import sys
 
+import torch
 from PIL import Image
 from huggingface_hub import hf_hub_download
+from skimage import io
 
 from briarmbg import BriaRMBG
 from utilities import preprocess_image, postprocess_image
 
-app = FastAPI()
 
-# Allow all origins
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 👈 allow all domains
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def remove_img_bg(input_img: str, img_type="jpg", out_img_suffix="_no_bg.png"):
+    model_path = hf_hub_download("briaai/RMBG-1.4", 'model.pth')
+    print("ai model model_path ==> ", model_path)
+    # 传入的绝对路径
+    abs_file = input_img.startswith("/") or input_img.find(":") > 0
+    if abs_file:
+        im_path = f"{input_img}.{img_type}"
+    else:
+        im_path = f"{os.path.dirname(os.path.abspath(__file__))}/resource/{input_img}.{img_type}"
 
-@app.post("/rmbg_from_file")
-async def remove_background_from_file(file: UploadFile = File(...)):
-    try:
-        temp_id = str(uuid.uuid4())
-        temp_input_path = f"{OUTPUT_DIR}/{temp_id}_input.png"
-        temp_output_path = f"{OUTPUT_DIR}/{temp_id}_no_bg.png"
-
-        # Validate uploaded file content type
-        if not file.content_type.startswith("image/"):
-            return JSONResponse(content={"error": "Uploaded file is not an image"}, status_code=400)
-
-        # Save uploaded image to disk
-        with open(temp_input_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-
-        # Remove background
-        remove_img_bg_local(temp_input_path, temp_output_path)
-
-        output_url = f"/output/{os.path.basename(temp_output_path)}"
-        return {"success": True, "url": output_url}
-
-    except ValueError as ve:
-        return JSONResponse(content={"error": str(ve)}, status_code=400)
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-# Output directory setup
-OUTPUT_DIR = "./output"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
-
-
-def remove_img_bg_local(input_path: str, output_path: str):
+    net = BriaRMBG()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = BriaRMBG().to(device)
+    net.load_state_dict(torch.load(model_path, map_location=device))
+    net.to(device)
     net.eval()
 
-    with Image.open(input_path) as pil_image:
-        pil_image = pil_image.convert("RGB")
-        orig_im = np.array(pil_image)
-
+    # prepare input
     model_input_size = [1024, 1024]
-    image_tensor = preprocess_image(orig_im, model_input_size).to(device)
-    result = net(image_tensor)  # simulate output
+    orig_im = io.imread(im_path)
+    orig_im_size = orig_im.shape[0:2]
+    image = preprocess_image(orig_im, model_input_size).to(device)
 
-    result_image = postprocess_image(result[0][0], orig_im.shape[0:2])
-    mask = Image.fromarray(result_image).convert("L")
-    orig_image = Image.open(input_path).convert("RGBA")
+    # inference 
+    result = net(image)
 
-    no_bg_image = Image.new("RGBA", mask.size, (0, 0, 0, 0))
-    no_bg_image.paste(orig_image, mask=mask)
-    no_bg_image.save(output_path)
+    # post process
+    result_image = postprocess_image(result[0][0], orig_im_size)
 
-    return output_path
-
-@app.get("/rmbg_from_url")
-def remove_background_from_url(image_url: str = Query(..., description="URL of the image")):
-    try:
-        temp_id = str(uuid.uuid4())
-        temp_input_path = f"{OUTPUT_DIR}/{temp_id}_input.png"
-        temp_output_path = f"{OUTPUT_DIR}/{temp_id}_no_bg.png"
-
-        # Download image
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(image_url, stream=True, headers=headers)
-        if response.status_code != 200:
-            return JSONResponse(content={"error": "Failed to download image"}, status_code=400)
-
-        if "image" not in response.headers.get("Content-Type", ""):
-            return JSONResponse(content={"error": "URL did not return an image"}, status_code=400)
-
-        # Save image to file
-        with open(temp_input_path, 'wb') as out_file:
-            shutil.copyfileobj(response.raw, out_file)
-
-        # Remove background
-        remove_img_bg_local(temp_input_path, temp_output_path)
-
-        output_url = f"/output/{os.path.basename(temp_output_path)}"
-        return {"success": True, "url": output_url}
-
-    except ValueError as ve:
-        return JSONResponse(content={"error": str(ve)}, status_code=400)
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+    # save result
+    pil_im = Image.fromarray(result_image)
+    no_bg_image = Image.new("RGBA", pil_im.size, (0, 0, 0, 0))
+    orig_image = Image.open(im_path)
+    no_bg_image.paste(orig_image, mask=pil_im)
+    if abs_file:
+        save_file_name = f"{input_img}{out_img_suffix}"
+    else:
+        save_file_name = f"{os.path.dirname(os.path.abspath(__file__))}/resource/{input_img}{out_img_suffix}"
+    no_bg_image.save(save_file_name)
+    print(f"图片处理完成! -> {save_file_name}")
+    return save_file_name
 
 
-# Old endpoint using local file
-@app.get("/rmbg")
+from fastapi import FastAPI
+
+app = FastAPI()
+
+"""
+通过下面的方式来实现抠图
+http://localhost:8000/rmbg?name=dog&type=jpg
+"""
+
+
+@app.get('/rmbg')
 def remove_background(name: str, type="jpg", outSuffix="_no_bg.png"):
-    file_path = f"./resource/{name}.{type}"
-    output_path = f"./resource/{name}{outSuffix}"
-    remove_img_bg_local(file_path, output_path)
-    return {"path": output_path}
-
+    print(f"img_name: {name}.{type}")
+    ans = remove_img_bg(name, type, outSuffix)
+    return ans
 
 if __name__ == "__main__":
+    # # 命令行方式执行
+    # # .\venv\Scripts\python.exe .\example_inference.py dog jpg oo
+    # argv = sys.argv
+    # file_name = argv[1]
+    # if len(argv) > 2:
+    #     file_type = argv[2]
+    # else:
+    #     file_type = "jpg"
+
+    # if len(argv) > 3:
+    #     out_suffix = argv[3]
+    # else:
+    #     out_suffix = "_no_bg"
+    # print("命令行方式执行!")
+    # example_inference(file_name, file_type, out_suffix)
+
+    # example_inference("dog")
+
+    # http 方式执行
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    
+    uvicorn.run(app=app,
+                host="0.0.0.0",
+                port=8000,
+                workers=1)
