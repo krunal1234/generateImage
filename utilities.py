@@ -1,19 +1,14 @@
 import torch
-import torchvision.transforms as transforms
 import numpy as np
-from PIL import Image
+import cv2
 
-def preprocess_image(image: np.ndarray, target_size=(1024, 1024)):
-    transform = transforms.Compose([
-        transforms.ToPILImage(),
-        transforms.Resize(target_size),
-        transforms.ToTensor()
-    ])
-    tensor = transform(image).unsqueeze(0)  # Add batch dimension
-    return tensor
+def preprocess_image(image: np.ndarray, size: list) -> torch.Tensor:
+    image_resized = cv2.resize(image, (size[1], size[0]))
+    image_tensor = torch.tensor(image_resized).permute(2, 0, 1).unsqueeze(0).float()
+    return image_tensor
 
-def postprocess_image(mask: torch.Tensor, original_size):
-    mask = transforms.Resize(original_size)(mask.unsqueeze(0))
-    mask = mask.squeeze().cpu().detach().numpy()
-    mask = (mask * 255).astype(np.uint8)
-    return mask
+def postprocess_image(mask_tensor: torch.Tensor, shape: tuple) -> np.ndarray:
+    mask_np = mask_tensor.detach().cpu().numpy()
+    mask_resized = cv2.resize(mask_np, (shape[1], shape[0]))
+    mask_resized = (mask_resized * 255).astype(np.uint8)
+    return mask_resized
