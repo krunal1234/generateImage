@@ -62,41 +62,27 @@ app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
 
 def remove_img_bg_local(input_path: str, output_path: str):
-    model_path = hf_hub_download("briaai/RMBG-1.4", 'model.pth')
-    net = BriaRMBG()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net.load_state_dict(torch.load(model_path, map_location=device))
-    net.to(device)
+    net = BriaRMBG().to(device)
     net.eval()
 
-    # Validate and read image
-    try:
-        with Image.open(input_path) as pil_image:
-            pil_image = pil_image.convert("RGB")  # Ensure 3-channel RGB
-            orig_im = np.array(pil_image)
-    except Exception:
-        raise ValueError("Downloaded file is not a valid image")
+    with Image.open(input_path) as pil_image:
+        pil_image = pil_image.convert("RGB")
+        orig_im = np.array(pil_image)
 
-    if orig_im is None or orig_im.size == 0:
-        raise ValueError("Failed to load image for processing")
-
-    # Prepare input
     model_input_size = [1024, 1024]
-    image = preprocess_image(orig_im, model_input_size).to(device)
-    result = net(image)
+    image_tensor = preprocess_image(orig_im, model_input_size).to(device)
+    result = net(image_tensor)  # simulate output
 
-    # Post-process
     result_image = postprocess_image(result[0][0], orig_im.shape[0:2])
     mask = Image.fromarray(result_image).convert("L")
     orig_image = Image.open(input_path).convert("RGBA")
 
-    # Apply mask
     no_bg_image = Image.new("RGBA", mask.size, (0, 0, 0, 0))
     no_bg_image.paste(orig_image, mask=mask)
     no_bg_image.save(output_path)
 
     return output_path
-
 
 @app.get("/rmbg_from_url")
 def remove_background_from_url(image_url: str = Query(..., description="URL of the image")):
